@@ -1,0 +1,2 @@
+class RemoteServiceError(Exception):
+    pass
