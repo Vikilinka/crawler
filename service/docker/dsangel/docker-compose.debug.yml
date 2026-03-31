@@ -1,0 +1,86 @@
+services:
+  postgres:
+    image: postgres:18.3-trixie
+    env_file: .env
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    environment:
+      - POSTGRES_DB=${DSA_DATABASE}
+      - POSTGRES_USER=${DSA_USERNAME}
+      - POSTGRES_PASSWORD=${DSA_PASSWORD}
+    ports:
+      - "5432:5432"
+
+  fastapi:
+    build: ${DSA_PROJECT_ROOT}
+    command: >
+      sh -c "
+        until pg_isready -h postgres -U ${DSA_USERNAME}; do
+          sleep 1;
+        done
+        alembic -c service/config/alembic/alembic.ini upgrade head
+      "
+    env_file: .env
+    volumes:
+      - ${DSA_PROJECT_ROOT}:/code
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+
+  redis:
+    image: redis:8.6.1-trixie
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${DSA_PASSWORD}
+    env_file: .env
+    volumes:
+      - redis_data:/data/
+      - ${DSA_PROJECT_ROOT}/service/config/redis/debug.conf:/usr/local/etc/redis/redis.conf
+    ports:
+      - "6379:6379"
+
+  celery:
+    build: ${DSA_PROJECT_ROOT}
+    command: celery -A essentials.celery worker -l info
+    env_file: .env
+    volumes:
+      - ${DSA_PROJECT_ROOT}:/code
+    depends_on:
+      - redis
+
+  beat:
+    build: ${DSA_PROJECT_ROOT}
+    command: celery -A essentials.celery beat -l info -s /beat/schedule.db
+    env_file: .env
+    volumes:
+      - ${DSA_PROJECT_ROOT}:/code
+      - beat_data:/beat
+    depends_on:
+      - redis
+
+  flower:
+    build: ${DSA_PROJECT_ROOT}
+    command: celery -A essentials.celery flower --basic-auth=${DSA_USERNAME}:${DSA_PASSWORD}
+    env_file: .env
+    volumes:
+      - ${DSA_PROJECT_ROOT}:/code
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+
+  nginx:
+    image: nginx:1.28.2-trixie
+    volumes:
+      - ${DSA_PROJECT_ROOT}:/code
+      - ${DSA_PROJECT_ROOT}/service/config/nginx/debug.conf:/etc/nginx/conf.d/default.conf
+      - ${DSA_PROJECT_ROOT}/static:/var/www/dsangel/static
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - fastapi
+
+volumes:
+  postgres_data:
+  redis_data:
+  beat_data:
